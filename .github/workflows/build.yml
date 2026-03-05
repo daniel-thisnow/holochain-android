@@ -10,9 +10,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  NDK_VERSION: '27.2.12479018'
-  API_LEVEL: '24'
-  LIBSODIUM_VERSION: '1.0.20'
 
 jobs:
   build:
@@ -31,116 +28,65 @@ jobs:
           repository: holochain/holochain
           ref: ${{ github.event.inputs.holochain_ref }}
 
-      - name: Install Rust toolchain + Android target
+      - name: Install Rust toolchain
         run: |
           if [ -f rust-toolchain.toml ]; then
             TOOLCHAIN=$(grep 'channel' rust-toolchain.toml | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/')
-            echo "Detected toolchain: $TOOLCHAIN"
           elif [ -f rust-toolchain ]; then
             TOOLCHAIN=$(cat rust-toolchain | tr -d '[:space:]')
           else
             TOOLCHAIN=stable
           fi
+          echo "Toolchain: $TOOLCHAIN"
           rustup toolchain install "$TOOLCHAIN" --target aarch64-linux-android --component rust-src
           rustup default "$TOOLCHAIN"
-          rustup target add aarch64-linux-android
-          rustc --version && cargo --version
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Create Cross.toml
+        run: |
+          cat > Cross.toml << 'EOF'
+          [target.aarch64-linux-android]
+          pre-build = [
+            "apt-get update -y && apt-get install -y --no-install-recommends protobuf-compiler autoconf libtool",
+            "curl -LO https://download.libsodium.org/libsodium/releases/libsodium-1.0.20.tar.gz && tar xzf libsodium-1.0.20.tar.gz && cd libsodium-1.0.20 && ./configure --host=aarch64-linux-android --prefix=/usr/local/aarch64-linux-android --disable-shared CC=${CC_aarch64_linux_android} AR=${AR_aarch64_linux_android} RANLIB=${RANLIB_aarch64_linux_android} CFLAGS='-fPIC' && make -j4 && make install",
+          ]
+          EOF
+          cat Cross.toml
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: android-aarch64
-
-      - name: Install Android NDK
-        run: |
-          sudo ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
-            --install "ndk;${NDK_VERSION}"
-          NDK_HOME="${ANDROID_HOME}/ndk/${NDK_VERSION}"
-          echo "NDK_HOME=${NDK_HOME}" >> $GITHUB_ENV
-          echo "ANDROID_NDK_ROOT=${NDK_HOME}" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=${NDK_HOME}" >> $GITHUB_ENV
-          echo "ANDROID_NDK=${NDK_HOME}" >> $GITHUB_ENV
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler perl make ninja-build cmake autoconf libtool
-
-      - name: Cross-compile libsodium for Android aarch64
-        run: |
-          NDK_TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
-          CC="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API_LEVEL}-clang"
-          AR="${NDK_TOOLCHAIN}/bin/llvm-ar"
-          RANLIB="${NDK_TOOLCHAIN}/bin/llvm-ranlib"
-          PREFIX="${GITHUB_WORKSPACE}/libsodium-android"
-
-          curl -LO "https://download.libsodium.org/libsodium/releases/libsodium-${LIBSODIUM_VERSION}.tar.gz"
-          tar xzf "libsodium-${LIBSODIUM_VERSION}.tar.gz"
-          cd "libsodium-${LIBSODIUM_VERSION}"
-
-          ./configure \
-            --host=aarch64-linux-android \
-            --prefix="$PREFIX" \
-            --disable-shared \
-            --enable-static \
-            CC="$CC" AR="$AR" RANLIB="$RANLIB" \
-            CFLAGS="-fPIC -O2"
-
-          make -j$(nproc)
-          make install
-
-          echo "SODIUM_LIB_DIR=${PREFIX}/lib" >> $GITHUB_ENV
-          echo "SODIUM_STATIC=1" >> $GITHUB_ENV
-          echo "SODIUM_USE_PKG_CONFIG=0" >> $GITHUB_ENV
-          echo "Built libsodium at ${PREFIX}/lib:"
-          ls -lh "${PREFIX}/lib/"
-
-      - name: Configure cross-compilation
-        run: |
-          NDK_TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
-
-          mkdir -p .cargo
-          cat >> .cargo/config.toml << TOML
-          [target.aarch64-linux-android]
-          linker = "${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API_LEVEL}-clang"
-          ar = "${NDK_TOOLCHAIN}/bin/llvm-ar"
-          TOML
-
-          echo "CC_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
-          echo "CXX_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
-          echo "AR_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/llvm-ar" >> $GITHUB_ENV
-          echo "RANLIB_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/llvm-ranlib" >> $GITHUB_ENV
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
-
-          echo "CMAKE_TOOLCHAIN_FILE=${NDK_HOME}/build/cmake/android.toolchain.cmake" >> $GITHUB_ENV
-          echo "ANDROID_ABI=arm64-v8a" >> $GITHUB_ENV
-          echo "ANDROID_PLATFORM=android-${API_LEVEL}" >> $GITHUB_ENV
-
-          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
-          echo "OPENSSL_NO_VENDOR=0" >> $GITHUB_ENV
-          echo "SQLITE_SYSTEM=0" >> $GITHUB_ENV
+          key: android-aarch64-cross
 
       - name: Build holochain
         run: |
-          cargo build --release \
+          cross build --release \
             --target aarch64-linux-android \
             -p holochain \
             --no-default-features \
             --features "default"
         env:
+          SODIUM_LIB_DIR: /usr/local/aarch64-linux-android/lib
+          SODIUM_STATIC: 1
+          SODIUM_USE_PKG_CONFIG: 0
           CARGO_BUILD_JOBS: 4
 
       - name: Build lair-keystore
         run: |
-          cargo build --release \
+          cross build --release \
             --target aarch64-linux-android \
             -p lair_keystore
         env:
+          SODIUM_LIB_DIR: /usr/local/aarch64-linux-android/lib
+          SODIUM_STATIC: 1
+          SODIUM_USE_PKG_CONFIG: 0
           CARGO_BUILD_JOBS: 4
 
       - name: Build hc CLI
         run: |
-          cargo build --release \
+          cross build --release \
             --target aarch64-linux-android \
             -p hc
         continue-on-error: true
