@@ -1,0 +1,128 @@
+name: Build Holochain for Android (aarch64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      holochain_ref:
+        description: 'Holochain git ref (tag, branch, or commit)'
+        required: true
+        default: 'holochain-0.6.1-rc.1'
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: '27.2.12479018'
+  API_LEVEL: '24'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk /opt/ghc
+          df -h /
+
+      - name: Checkout holochain
+        uses: actions/checkout@v4
+        with:
+          repository: holochain/holochain
+          ref: ${{ github.event.inputs.holochain_ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: android-aarch64
+
+      - name: Install Android NDK
+        run: |
+          sudo ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
+            --install "ndk;${NDK_VERSION}"
+          echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> $GITHUB_ENV
+
+      - name: Configure cross-compilation
+        run: |
+          NDK_TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
+          NDK_SYSROOT="${NDK_TOOLCHAIN}/sysroot"
+
+          # Cargo target config
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << TOML
+          [target.aarch64-linux-android]
+          linker = "${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API_LEVEL}-clang"
+          ar = "${NDK_TOOLCHAIN}/bin/llvm-ar"
+          TOML
+
+          # Environment for C/C++ builds
+          echo "CC_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+
+          # OpenSSL - build from source for Android
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
+          echo "OPENSSL_NO_VENDOR=0" >> $GITHUB_ENV
+
+          # SQLite - use bundled
+          echo "SQLITE_SYSTEM=0" >> $GITHUB_ENV
+          echo "LIBSQLITE3_FLAGS=-DSQLITE_ENABLE_FTS5" >> $GITHUB_ENV
+
+          # Sodium - use bundled
+          echo "SODIUM_BUILD_STATIC=1" >> $GITHUB_ENV
+          echo "SODIUM_USE_PKG_CONFIG=0" >> $GITHUB_ENV
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler perl make
+
+      - name: Build holochain (iroh transport)
+        run: |
+          cargo build --release \
+            --target aarch64-linux-android \
+            -p holochain \
+            --no-default-features \
+            --features "default"
+        env:
+          CARGO_BUILD_JOBS: 4
+
+      - name: Build lair-keystore
+        run: |
+          cargo build --release \
+            --target aarch64-linux-android \
+            -p lair_keystore
+        env:
+          CARGO_BUILD_JOBS: 4
+
+      - name: Build hc CLI
+        run: |
+          cargo build --release \
+            --target aarch64-linux-android \
+            -p hc
+        continue-on-error: true
+
+      - name: Collect binaries
+        run: |
+          mkdir -p artifacts
+          TARGET_DIR="target/aarch64-linux-android/release"
+          for bin in holochain lair-keystore hc; do
+            if [ -f "${TARGET_DIR}/${bin}" ]; then
+              cp "${TARGET_DIR}/${bin}" artifacts/
+              ls -lh "artifacts/${bin}"
+              file "artifacts/${bin}"
+            fi
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: holochain-android-aarch64
+          path: artifacts/
+          retention-days: 30
