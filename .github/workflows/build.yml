@@ -15,6 +15,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: write
 
     steps:
       - name: Free disk space
@@ -109,4 +111,27 @@ jobs:
         with:
           name: holochain-android-aarch64
           path: artifacts/
-          retention-days: 30
+          retention-days: 90
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.holochain_ref }}
+          name: "holochain ${{ github.event.inputs.holochain_ref }} · aarch64-linux-android"
+          body: |
+            Native Android binaries for **${{ github.event.inputs.holochain_ref }}**.
+
+            Built with [cross](https://github.com/cross-rs/cross) targeting `aarch64-linux-android` (Android NDK r25b, API 28).
+            Uses Android's native linker (`/system/bin/linker64`) — runs directly in Termux without proot.
+
+            ## Install
+            ```bash
+            bash <(curl -fsSL https://raw.githubusercontent.com/daniel-thisnow/moss-android-edge-node/main/install.sh)
+            ```
+
+            ## Manual download
+            Download `holochain` and `lair-keystore` from the assets below and place them in `~/holochain-native/bin/`.
+          files: artifacts/*
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
