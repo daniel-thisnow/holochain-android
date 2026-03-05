@@ -28,7 +28,12 @@ jobs:
           repository: holochain/holochain
           ref: ${{ github.event.inputs.holochain_ref }}
 
-      - name: Install Rust toolchain
+      - name: Install cross (using stable, independent of holochain's pinned toolchain)
+        run: |
+          rustup toolchain install stable
+          cargo +stable install cross --git https://github.com/cross-rs/cross
+
+      - name: Install holochain's pinned Rust toolchain + Android target
         run: |
           if [ -f rust-toolchain.toml ]; then
             TOOLCHAIN=$(grep 'channel' rust-toolchain.toml | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/')
@@ -37,23 +42,19 @@ jobs:
           else
             TOOLCHAIN=stable
           fi
-          echo "Toolchain: $TOOLCHAIN"
+          echo "Holochain toolchain: $TOOLCHAIN"
           rustup toolchain install "$TOOLCHAIN" --target aarch64-linux-android --component rust-src
           rustup default "$TOOLCHAIN"
-
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Create Cross.toml
         run: |
           cat > Cross.toml << 'EOF'
           [target.aarch64-linux-android]
           pre-build = [
-            "apt-get update -y && apt-get install -y --no-install-recommends protobuf-compiler autoconf libtool",
-            "curl -LO https://download.libsodium.org/libsodium/releases/libsodium-1.0.20.tar.gz && tar xzf libsodium-1.0.20.tar.gz && cd libsodium-1.0.20 && ./configure --host=aarch64-linux-android --prefix=/usr/local/aarch64-linux-android --disable-shared CC=${CC_aarch64_linux_android} AR=${AR_aarch64_linux_android} RANLIB=${RANLIB_aarch64_linux_android} CFLAGS='-fPIC' && make -j4 && make install",
+            "apt-get update -y && apt-get install -y --no-install-recommends protobuf-compiler autoconf libtool make",
+            "curl -LO https://download.libsodium.org/libsodium/releases/libsodium-1.0.20.tar.gz && tar xzf libsodium-1.0.20.tar.gz && cd libsodium-1.0.20 && ./configure --host=aarch64-linux-android --prefix=/usr/local/aarch64-linux-android --disable-shared CC=${CC_aarch64_linux_android} AR=${AR_aarch64_linux_android} RANLIB=${RANLIB_aarch64_linux_android} CFLAGS='-fPIC' && make -j$(nproc) && make install",
           ]
           EOF
-          cat Cross.toml
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
