@@ -30,13 +30,24 @@ jobs:
           repository: holochain/holochain
           ref: ${{ github.event.inputs.holochain_ref }}
 
-      - name: Install Rust (respects rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@master
-        with:
-          targets: aarch64-linux-android
-
-      - name: Add Android target for active toolchain
-        run: rustup target add aarch64-linux-android
+      - name: Install Rust toolchain + Android target
+        run: |
+          # Read the pinned toolchain from rust-toolchain.toml (if present), else use stable
+          if [ -f rust-toolchain.toml ]; then
+            TOOLCHAIN=$(grep 'channel' rust-toolchain.toml | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/')
+            echo "Detected toolchain from rust-toolchain.toml: $TOOLCHAIN"
+          elif [ -f rust-toolchain ]; then
+            TOOLCHAIN=$(cat rust-toolchain | tr -d '[:space:]')
+            echo "Detected toolchain from rust-toolchain: $TOOLCHAIN"
+          else
+            TOOLCHAIN=stable
+            echo "No rust-toolchain file found, using stable"
+          fi
+          rustup toolchain install "$TOOLCHAIN" --target aarch64-linux-android --component rust-src
+          rustup default "$TOOLCHAIN"
+          rustup target add aarch64-linux-android
+          rustc --version
+          cargo --version
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
