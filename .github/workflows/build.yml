@@ -32,22 +32,18 @@ jobs:
 
       - name: Install Rust toolchain + Android target
         run: |
-          # Read the pinned toolchain from rust-toolchain.toml (if present), else use stable
           if [ -f rust-toolchain.toml ]; then
             TOOLCHAIN=$(grep 'channel' rust-toolchain.toml | head -1 | sed 's/.*=\s*"\(.*\)".*/\1/')
-            echo "Detected toolchain from rust-toolchain.toml: $TOOLCHAIN"
+            echo "Detected toolchain: $TOOLCHAIN"
           elif [ -f rust-toolchain ]; then
             TOOLCHAIN=$(cat rust-toolchain | tr -d '[:space:]')
-            echo "Detected toolchain from rust-toolchain: $TOOLCHAIN"
           else
             TOOLCHAIN=stable
-            echo "No rust-toolchain file found, using stable"
           fi
           rustup toolchain install "$TOOLCHAIN" --target aarch64-linux-android --component rust-src
           rustup default "$TOOLCHAIN"
           rustup target add aarch64-linux-android
-          rustc --version
-          cargo --version
+          rustc --version && cargo --version
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -58,7 +54,17 @@ jobs:
         run: |
           sudo ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
             --install "ndk;${NDK_VERSION}"
-          echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> $GITHUB_ENV
+          NDK_HOME="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          echo "NDK_HOME=${NDK_HOME}" >> $GITHUB_ENV
+          # Expose NDK root so CMake (aws-lc-sys, etc.) can find it
+          echo "ANDROID_NDK_ROOT=${NDK_HOME}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${NDK_HOME}" >> $GITHUB_ENV
+          echo "ANDROID_NDK=${NDK_HOME}" >> $GITHUB_ENV
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler perl make ninja-build cmake
 
       - name: Configure cross-compilation
         run: |
@@ -77,17 +83,16 @@ jobs:
           echo "RANLIB_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/llvm-ranlib" >> $GITHUB_ENV
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
 
+          # CMake toolchain file for NDK-aware builds (used by aws-lc-sys etc.)
+          echo "CMAKE_TOOLCHAIN_FILE=${NDK_HOME}/build/cmake/android.toolchain.cmake" >> $GITHUB_ENV
+          echo "ANDROID_ABI=arm64-v8a" >> $GITHUB_ENV
+          echo "ANDROID_PLATFORM=android-${API_LEVEL}" >> $GITHUB_ENV
+
           echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
           echo "OPENSSL_NO_VENDOR=0" >> $GITHUB_ENV
           echo "SQLITE_SYSTEM=0" >> $GITHUB_ENV
-          echo "LIBSQLITE3_FLAGS=-DSQLITE_ENABLE_FTS5" >> $GITHUB_ENV
           echo "SODIUM_BUILD_STATIC=1" >> $GITHUB_ENV
           echo "SODIUM_USE_PKG_CONFIG=0" >> $GITHUB_ENV
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler perl make
 
       - name: Build holochain
         run: |
